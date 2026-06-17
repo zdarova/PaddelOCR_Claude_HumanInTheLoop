@@ -1,0 +1,32 @@
+ocr:
+  lang: "it"  # Italian + English mixed document
+  use_angle_cls: true  # maps to use_textline_orientation in 3.x
+  # PP-OCRv5 is default in 3.6
+  ocr_version: "PP-OCRv5"
+
+# Italian number format: 1.234.567,89 (dot=thousands, comma=decimal)
+number_format:
+  thousands_sep: "."
+  decimal_sep: ","
+
+validation:
+  # Minimum accuracy score (0-1) before flagging for human review
+  accuracy_threshold: 0.85
+  # Claude model for validation (via AWS Secrets Manager)
+  claude_model: "claude-opus-4-8"
+  max_tokens: 4096
+
+rendering:
+  dpi: 300
+  image_format: "png"
+
+rotation:
+  # Max degrees to attempt deskew
+  max_angle: 15.0
+
+ui:
+  host: "127.0.0.1"
+  port: 5000
+
+output:
+  excel_engine: "openpyxl"

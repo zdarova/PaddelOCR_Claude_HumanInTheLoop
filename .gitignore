@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+.env_config
+
+# Data directories — keep structure via .gitkeep, ignore content
+input/*
+!input/.gitkeep
+working/*
+!working/.gitkeep
+output/*
+!output/.gitkeep
+
+# PaddleOCR cached models
+.paddlex/
+*.paddlex/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# pytest
+.pytest_cache/

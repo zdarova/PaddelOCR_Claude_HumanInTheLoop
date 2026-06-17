@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Review Page {{ page_data.page_num }} — {{ page_data.pdf_stem }}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }
+        .container { display: flex; gap: 1rem; height: calc(100vh - 2rem); }
+        .image-panel { flex: 2; position: relative; overflow: auto; border: 1px solid #ccc; }
+        .image-panel img { max-width: 100%; }
+        .cell-overlay {
+            position: absolute; border: 2px solid rgba(25, 118, 210, 0.7);
+            background: rgba(25, 118, 210, 0.1); cursor: pointer;
+            font-size: 10px; overflow: hidden;
+        }
+        .cell-overlay:hover { background: rgba(25, 118, 210, 0.3); }
+        .cell-overlay.selected { border-color: #d32f2f; background: rgba(211, 47, 47, 0.2); }
+        .editor-panel { flex: 1; overflow-y: auto; }
+        .cell-editor { margin-bottom: 0.5rem; padding: 0.5rem; border: 1px solid #eee; border-radius: 4px; }
+        .cell-editor input { width: 100%; padding: 0.3rem; box-sizing: border-box; }
+        .cell-editor.modified input { border-color: #f57c00; background: #fff3e0; }
+        .actions { padding: 1rem 0; display: flex; gap: 0.5rem; }
+        button { padding: 0.5rem 1rem; cursor: pointer; border: none; border-radius: 4px; }
+        .btn-save { background: #388e3c; color: white; }
+        .btn-back { background: #757575; color: white; }
+        .status { margin-top: 0.5rem; padding: 0.5rem; border-radius: 4px; }
+        .status.success { background: #e8f5e9; color: #2e7d32; }
+        .status.error { background: #ffebee; color: #c62828; }
+        h2 { margin: 0 0 0.5rem 0; }
+        .meta { color: #666; font-size: 0.85rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="image-panel" id="imagePanel">
+            {% if page_data.image_path %}
+                <img id="pageImage" src="/api/image/{{ page_data.image_path | replace('\\', '/') | split('/') | last }}" onload="renderOverlays()">
+            {% else %}
+                <p>No image available (text-selectable page)</p>
+            {% endif %}
+        </div>
+        <div class="editor-panel">
+            <h2>Page {{ page_data.page_num }}</h2>
+            <div class="meta">
+                PDF: {{ page_data.pdf_stem }}<br>
+                Accuracy: {{ "%.0f"|format((page_data.accuracy_score or 0) * 100) }}%<br>
+                {{ page_data.validation_notes or '' }}
+            </div>
+            <div class="actions">
+                <button class="btn-save" onclick="saveCorrections()">💾 Save</button>
+                <button class="btn-back" onclick="location.href='/'">← Back</button>
+            </div>
+            <div id="status"></div>
+            <div id="cellEditors"></div>
+        </div>
+    </div>
+
+    <script>
+        const pageData = {{ page_data | tojson }};
+        let cells = JSON.parse(JSON.stringify(pageData.cells || []));
+
+        function renderOverlays() {
+            const panel = document.getElementById('imagePanel');
+            const img = document.getElementById('pageImage');
+            if (!img) return;
+
+            // Remove existing overlays
+            panel.querySelectorAll('.cell-overlay').forEach(el => el.remove());
+
+            const scaleX = img.clientWidth / img.naturalWidth;
+            const scaleY = img.clientHeight / img.naturalHeight;
+
+            cells.forEach((cell, idx) => {
+                // PaddleOCR 4-point polygon: [[tl_x,tl_y],[tr_x,tr_y],[br_x,br_y],[bl_x,bl_y]]
+                const bbox = cell.bbox;
+                let x1, y1, w, h;
+
+                if (Array.isArray(bbox[0])) {
+                    // 4-point polygon format
+                    x1 = bbox[0][0];
+                    y1 = bbox[0][1];
+                    w = bbox[1][0] - bbox[0][0];
+                    h = bbox[3][1] - bbox[0][1];
+                } else {
+                    // Legacy [x1,y1,x2,y2] fallback
+                    x1 = bbox[0]; y1 = bbox[1];
+                    w = bbox[2] - bbox[0]; h = bbox[3] - bbox[1];
+                }
+
+                const div = document.createElement('div');
+                div.className = 'cell-overlay';
+                div.style.left = (x1 * scaleX) + 'px';
+                div.style.top = (y1 * scaleY) + 'px';
+                div.style.width = (w * scaleX) + 'px';
+                div.style.height = (h * scaleY) + 'px';
+                div.textContent = cell.text;
+                div.onclick = () => focusEditor(idx);
+                panel.appendChild(div);
+            });
+        }
+
+        function renderEditors() {
+            const container = document.getElementById('cellEditors');
+            container.innerHTML = '';
+            cells.forEach((cell, idx) => {
+                const div = document.createElement('div');
+                div.className = 'cell-editor' + (cell._modified ? ' modified' : '');
+                div.id = 'editor-' + idx;
+                div.innerHTML = `
+                    <label>Cell ${idx} (conf: ${(cell.confidence * 100).toFixed(0)}%)</label>
+                    <input type="text" value="${cell.text.replace(/"/g, '&quot;')}"
+                           onchange="updateCell(${idx}, this.value)"
+                           onfocus="highlightOverlay(${idx})">
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function updateCell(idx, value) {
+            cells[idx].text = value;
+            cells[idx]._modified = true;
+            renderOverlays();
+            document.getElementById('editor-' + idx).className = 'cell-editor modified';
+        }
+
+        function focusEditor(idx) {
+            const editor = document.getElementById('editor-' + idx);
+            if (editor) {
+                editor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                editor.querySelector('input').focus();
+            }
+        }
+
+        function highlightOverlay(idx) {
+            document.querySelectorAll('.cell-overlay').forEach((el, i) => {
+                el.classList.toggle('selected', i === idx);
+            });
+        }
+
+        async function saveCorrections() {
+            const payload = {
+                pdf_stem: pageData.pdf_stem,
+                page_num: pageData.page_num,
+                cells: cells.map(c => ({
+                    cell_id: c.cell_id,
+                    bbox: c.bbox,
+                    text: c.text,
+                    confidence: c.confidence,
+                }))
+            };
+            try {
+                const res = await fetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+                document.getElementById('status').innerHTML =
+                    `<div class="status success">✅ Saved — page marked as modified</div>`;
+            } catch (e) {
+                document.getElementById('status').innerHTML =
+                    `<div class="status error">❌ Error: ${e.message}</div>`;
+            }
+        }
+
+        renderEditors();
+        window.addEventListener('resize', renderOverlays);
+    </script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OCR Review Queue</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.5rem; border: 1px solid #ddd; text-align: left; }
+        th { background: #f5f5f5; }
+        .score { font-weight: bold; }
+        .low { color: #d32f2f; }
+        .mid { color: #f57c00; }
+        .high { color: #388e3c; }
+        .modified { background: #e8f5e9; }
+        a { color: #1565c0; }
+    </style>
+</head>
+<body>
+    <h1>📋 OCR Review Queue</h1>
+    {% if not pages %}
+        <p>No pages in queue. All pages passed validation.</p>
+    {% else %}
+    <table>
+        <thead>
+            <tr>
+                <th>PDF</th>
+                <th>Page</th>
+                <th>Accuracy</th>
+                <th>Notes</th>
+                <th>Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for page in pages %}
+            <tr class="{{ 'modified' if page.modified else '' }}">
+                <td>{{ page.pdf_stem }}</td>
+                <td>{{ page.page_num }}</td>
+                <td class="score {{ 'low' if page.accuracy_score < 0.5 else 'mid' if page.accuracy_score < 0.85 else 'high' }}">
+                    {{ "%.0f"|format(page.accuracy_score * 100) }}%
+                </td>
+                <td>{{ page.notes }}</td>
+                <td>{{ "✅ Modified" if page.modified else "⏳ Pending" }}</td>
+                <td><a href="/review/{{ page.file }}">Review</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</body>
+</html>
