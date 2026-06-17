@@ -157,14 +157,19 @@ def _build_rows(cells: list[dict], col_positions: dict[str, float]) -> list[list
         [c for c in cells if c["_col"] == 0],
         key=lambda c: c["bbox"][0][1]
     )
-    # Calculate row spacing from first-column cells
-    first_col_ys = [c["bbox"][0][1] for c in first_col_cells]
-    if len(first_col_ys) >= 2:
-        spacings = [first_col_ys[i+1] - first_col_ys[i] for i in range(len(first_col_ys)-1)]
-        # Ignore tiny spacings (< 10px = same row, split header like CODICE + NATURA)
-        real_spacings = [s for s in spacings if s > 10]
-        row_spacing = min(real_spacings) if real_spacings else 30
-        row_tolerance = row_spacing * 0.45  # less than half the row spacing
+    # STATISTICAL ROW PITCH: learn from gap distribution across ALL body cells
+    all_y_tops = sorted(set(int(c["bbox"][0][1]) for c in cells))
+    if len(all_y_tops) >= 3:
+        gaps = [all_y_tops[i+1] - all_y_tops[i] for i in range(len(all_y_tops)-1)]
+        # Filter out intra-row jitter (< 10px) to find inter-row gaps
+        inter_row_gaps = [g for g in gaps if g > 10]
+        if inter_row_gaps:
+            # Dominant row pitch = median of inter-row gaps (robust to outliers)
+            sorted_gaps = sorted(inter_row_gaps)
+            pitch = sorted_gaps[len(sorted_gaps) // 2]  # median
+            row_tolerance = pitch * 0.4  # auto-scales with actual spacing
+        else:
+            row_tolerance = 20
     else:
         row_tolerance = 20
 
