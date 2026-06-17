@@ -72,7 +72,7 @@ def validate_page(page_result: dict) -> dict:
         _queue_page(page_result)
         return page_result
 
-    prompt = f"""Analyze this CSV table extracted via OCR from an Italian Joint Venture accounting form (RENDICONTO di JOINT VENTURE).
+    prompt = f"""Analyze this CSV table extracted via OCR from an Italian accounting form.
 
 IMPORTANT — Italian number format:
 - Dot (.) is the THOUSANDS separator: 610.923 = six hundred ten thousand nine hundred twenty-three

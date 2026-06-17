@@ -12,7 +12,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# Test constants
+# Test constants — update PDF_NAME to match your test file in input/
 PDF_NAME = "GP09-2026U0027_20260130161048501.pdf"
 PDF_PATH = Path(__file__).parent.parent / "input" / PDF_NAME
 BENCHMARK_PAGE = 7

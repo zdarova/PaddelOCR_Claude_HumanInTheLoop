@@ -21,6 +21,10 @@ COLUMN_HEADERS = [
     "TOTALE PROGRESSIVO",
 ]
 
+# Italian number format: optional thousands dots + mandatory comma + 2 decimals
+# Valid: 0,00 | 45,50 | 4.152,96 | 610.923,82 | 7.296.050,00
+ITALIAN_NUMBER_RE = re.compile(r'^\d{1,3}(\.\d{3})*,\d{2}$')
+
 
 def reconstruct_table(cells: list[dict]) -> dict:
     """
@@ -157,7 +161,9 @@ def _build_rows(cells: list[dict], col_positions: dict[str, float]) -> list[list
     first_col_ys = [c["bbox"][0][1] for c in first_col_cells]
     if len(first_col_ys) >= 2:
         spacings = [first_col_ys[i+1] - first_col_ys[i] for i in range(len(first_col_ys)-1)]
-        row_spacing = min(spacings)  # minimum distance between rows
+        # Ignore tiny spacings (< 10px = same row, split header like CODICE + NATURA)
+        real_spacings = [s for s in spacings if s > 10]
+        row_spacing = min(real_spacings) if real_spacings else 30
         row_tolerance = row_spacing * 0.45  # less than half the row spacing
     else:
         row_tolerance = 20
@@ -242,3 +248,155 @@ def write_table_csv(grid: list[list[str]], csv_path: Path):
         writer = csv.writer(f)
         for row in grid:
             writer.writerow(row)
+
+
+def validate_italian_numbers(result: dict) -> dict:
+    """
+    Validate that all financial numbers in TOTALE PERIODO and TOTALE PROGRESSIVO
+    columns are in valid Italian format (dot=thousands, comma=decimal, 2 decimal places).
+    
+    Returns:
+        {
+            "valid": bool,
+            "accuracy_score": float (0-1),
+            "invalid_cells": [{"row": int, "col": str, "value": str, "reason": str}],
+            "sum_check": {"periodo": {"computed": str, "expected": str, "match": bool},
+                          "progressivo": {"computed": str, "expected": str, "match": bool}}
+        }
+    """
+    rows = result.get("rows", [])
+    columns = result.get("columns", [])
+    if not rows or not columns:
+        return {"valid": False, "accuracy_score": 0.0, "invalid_cells": [], "sum_check": {}}
+
+    # Find column indices for TOTALE PERIODO and TOTALE PROGRESSIVO
+    periodo_idx = None
+    progressivo_idx = None
+    for i, col in enumerate(columns):
+        if "PERIODO" in col.upper():
+            periodo_idx = i
+        elif "PROGRESSIVO" in col.upper():
+            progressivo_idx = i
+
+    invalid_cells = []
+    total_numbers = 0
+    valid_numbers = 0
+
+    # Check each data row (skip header row and totals row)
+    data_rows = []
+    totale_row = None
+    for row_idx, row in enumerate(rows):
+        # Skip header row
+        if any("CODICE" in cell.upper() or "DESCRIZIONE" in cell.upper() for cell in row if cell):
+            continue
+        # Detect totals row
+        if any("TOTALE COMMESSA" in cell.upper() for cell in row if cell):
+            totale_row = (row_idx, row)
+            continue
+        data_rows.append((row_idx, row))
+
+    # Validate numbers in financial columns
+    for row_idx, row in data_rows:
+        for col_idx in [periodo_idx, progressivo_idx]:
+            if col_idx is None or col_idx >= len(row):
+                continue
+            value = row[col_idx].strip()
+            if not value:
+                continue
+            total_numbers += 1
+            if ITALIAN_NUMBER_RE.match(value):
+                valid_numbers += 1
+            else:
+                col_name = columns[col_idx] if col_idx < len(columns) else f"col_{col_idx}"
+                invalid_cells.append({
+                    "row": row_idx,
+                    "col": col_name,
+                    "value": value,
+                    "reason": _diagnose_number_error(value),
+                })
+
+    # Sum validation: check TOTALE COMMESSA matches sum of data rows
+    sum_check = {}
+    if totale_row:
+        _, trow = totale_row
+        for label, col_idx in [("periodo", periodo_idx), ("progressivo", progressivo_idx)]:
+            if col_idx is None or col_idx >= len(trow):
+                continue
+            expected_str = trow[col_idx].strip()
+            if not ITALIAN_NUMBER_RE.match(expected_str):
+                sum_check[label] = {"computed": "N/A", "expected": expected_str, "match": False}
+                continue
+            expected = _parse_italian_number(expected_str)
+            computed = 0.0
+            for _, row in data_rows:
+                if col_idx < len(row):
+                    val = row[col_idx].strip()
+                    if ITALIAN_NUMBER_RE.match(val):
+                        computed += _parse_italian_number(val)
+            match = abs(computed - expected) < 0.01
+            sum_check[label] = {
+                "computed": _format_italian_number(computed),
+                "expected": expected_str,
+                "match": match,
+            }
+            if not match:
+                invalid_cells.append({
+                    "row": totale_row[0],
+                    "col": f"TOTALE COMMESSA ({label})",
+                    "value": expected_str,
+                    "reason": f"Sum mismatch: computed {_format_italian_number(computed)} != declared {expected_str}",
+                })
+
+    # Calculate accuracy score
+    if total_numbers == 0:
+        accuracy = 0.0
+    else:
+        accuracy = valid_numbers / total_numbers
+        # Penalize sum mismatches
+        if sum_check:
+            sum_matches = sum(1 for s in sum_check.values() if s.get("match"))
+            sum_total = len(sum_check)
+            accuracy = accuracy * 0.7 + (sum_matches / sum_total) * 0.3
+
+    return {
+        "valid": len(invalid_cells) == 0,
+        "accuracy_score": accuracy,
+        "invalid_cells": invalid_cells,
+        "sum_check": sum_check,
+    }
+
+
+def _parse_italian_number(s: str) -> float:
+    """Parse Italian format number to float: 610.923,82 → 610923.82"""
+    return float(s.replace(".", "").replace(",", "."))
+
+
+def _format_italian_number(n: float) -> str:
+    """Format float to Italian number: 610923.82 → 610.923,82"""
+    int_part = int(abs(n))
+    dec_part = round((abs(n) - int_part) * 100)
+    # Add thousands dots
+    int_str = f"{int_part:,}".replace(",", ".")
+    result = f"{int_str},{dec_part:02d}"
+    return f"-{result}" if n < 0 else result
+
+
+def _diagnose_number_error(value: str) -> str:
+    """Diagnose why a number doesn't match Italian format."""
+    if "," not in value:
+        return "Missing comma decimal separator"
+    parts = value.rsplit(",", 1)
+    if len(parts) == 2 and len(parts[1]) != 2:
+        return f"Decimal part has {len(parts[1])} digits instead of 2"
+    if "." in parts[0]:
+        # Check thousands grouping
+        groups = parts[0].split(".")
+        for g in groups[1:]:
+            if len(g) != 3:
+                return f"Invalid thousands grouping: '{parts[0]}'"
+    # Check for non-digit characters
+    clean = value.replace(".", "").replace(",", "")
+    if not clean.replace("-", "").isdigit():
+        non_digits = [ch for ch in clean if not ch.isdigit() and ch != "-"]
+        return f"Non-digit characters: {non_digits}"
+    return "Unknown format issue"

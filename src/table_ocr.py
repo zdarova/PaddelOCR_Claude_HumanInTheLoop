@@ -211,12 +211,21 @@ def extract_table(image_path: Path, page_num: int, pdf_stem: str) -> dict:
     if extraction_mode == "table" and any(c.get("row_idx") is not None for c in all_cells):
         _write_csv_structured(all_cells, csv_path)
     else:
-        from src.table_reconstructor import reconstruct_table, write_table_csv
+        from src.table_reconstructor import reconstruct_table, write_table_csv, validate_italian_numbers
         result = reconstruct_table(all_cells)
         if result["rows"] and len(result["rows"][0]) > 1:
             write_table_csv(result["rows"], csv_path)
             page_result["table_header"] = result["header"]
             page_result["table_columns"] = result["columns"]
+            # Validate Italian number format + sum check
+            num_validation = validate_italian_numbers(result)
+            page_result["number_validation"] = num_validation
+            if not num_validation["valid"]:
+                page_result["accuracy_score"] = num_validation["accuracy_score"]
+                page_result["validation_notes"] = (
+                    f"Number format issues: {len(num_validation['invalid_cells'])} invalid cells. "
+                    + "; ".join(f"{e['col']}: '{e['value']}' ({e['reason']})" for e in num_validation["invalid_cells"][:5])
+                )
         else:
             _write_csv_adaptive(all_cells, csv_path)
     page_result["csv_path"] = str(csv_path)

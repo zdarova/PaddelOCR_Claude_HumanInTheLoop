@@ -1,6 +1,6 @@
 # PaddleOCR + Claude Human-in-the-Loop Table OCR
 
-PDF table extraction pipeline for Italian Joint Venture accounting forms using PaddleOCR 3.6, Claude Opus validation, and human-in-the-loop correction.
+PDF table extraction pipeline for scanned Italian accounting forms using PaddleOCR 3.6, Claude Opus validation, and human-in-the-loop correction UI.
 
 ## Architecture
 
@@ -18,13 +18,17 @@ PDF (input/)
     │   └── Raw OCR with 4-point polygon bounding boxes
     │
     ├── Template-Aware Table Reconstruction
-    │   ├── Column detection from header anchors (CODICE NATURA, DESCRIZIONE, TOTALE PERIODO, TOTALE PROGRESSIVO)
+    │   ├── Column detection from header anchors
     │   ├── Row anchoring from first-column cells
-    │   └── Form metadata extraction (ALLEGATO, JV, CONTRATTO, ATTIVITA', FASE, SUBFASE, COMMESSA)
+    │   └── Form metadata extraction (header fields above table)
     │
-    ├── Claude Opus 4.8 Validation (Italian number format aware)
-    │   ├── Row sum → TOTALE COMMESSA check
-    │   ├── Column sum consistency
+    ├── Italian Number Format Validation
+    │   ├── Regex check on all financial cells (dot=thousands, comma=decimal)
+    │   ├── Sum verification: data rows must match totals row
+    │   └── Auto-queue low-accuracy pages for human review
+    │
+    ├── Claude Opus 4.8 Validation (optional)
+    │   ├── Semantic number consistency check
     │   └── OCR error detection (0/O, 1/l, 5/S)
     │
     ├── Low Accuracy → Human Queue (working/queue/)
@@ -36,34 +40,33 @@ PDF (input/)
 
 ## Italian Number Format
 
+The pipeline is designed for Italian accounting documents where:
 - Dot (`.`) = thousands separator: `610.923` = 610,923
 - Comma (`,`) = decimal separator: `610.923,82` = 610,923.82
+- All financial values must have exactly 2 decimal places
 
-## Template Structure
+**Any number not matching this format triggers low accuracy and human review.**
 
-Each page follows the standard JV accounting form:
+## Supported Template Structure
+
+The default template has a header section followed by a data table:
 
 ```
-ALLEGATO al RENDICONTO di JOINT VENTURE per TITOLO MINERARIO del periodo XX / YYYY
-JOINT VENTURE: XXXXXX NAME
-TIPO CONTRATTO: O (O = JOINT VENTURE; A = ASSOCIAZIONE IN PARTECIPAZIONE)
-ATTIVITA': X  Descrizione
-FASE: XX  DESCRIZIONE FASE
-SUBFASE: ...
-COMMESSA: CODE  Descrizione commessa
+[Header metadata: document type, entity info, contract type, activity, phase, subphase, reference code]
 
 ┌─────────────────┬────────────────────────────┬────────────────┬─────────────────────┐
-│ CODICE NATURA   │ DESCRIZIONE NATURA         │ TOTALE PERIODO │ TOTALE PROGRESSIVO  │
+│ Column 1        │ Column 2                   │ Column 3       │ Column 4            │
+│ (Code/ID)       │ (Description)              │ (Period Total) │ (Cumulative Total)  │
 ├─────────────────┼────────────────────────────┼────────────────┼─────────────────────┤
-│ 7110034         │ Posa tratto a terra        │ 0,00           │ 45,50               │
-│ 7215006         │ Viaggi e trasferte         │ 0,00           │ 290,00              │
+│ 7110034         │ Description text            │ 0,00           │ 45,50               │
+│ 7215006         │ Another description         │ 0,00           │ 290,00              │
 │ ...             │ ...                        │ ...            │ ...                 │
 ├─────────────────┼────────────────────────────┼────────────────┼─────────────────────┤
-│                 │ TOTALE COMMESSA:           │ 610.923,82     │ 752.087,28          │
+│                 │ TOTALS ROW:                │ 610.923,82     │ 752.087,28          │
 └─────────────────┴────────────────────────────┴────────────────┴─────────────────────┘
 ```
 
-**Validation rule**: Sum of all TOTALE PERIODO values must equal TOTALE COMMESSA PERIODO, same for PROGRESSIVO.
+**Validation rule**: Sum of column 3 data values must equal the totals row value. Same for column 4.
 
 ## Quick Start
 
@@ -80,7 +83,7 @@ PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True python main.py input/document.pdf
 # Process specific pages
 python main.py input/document.pdf --pages 7 10 15
 
-# Skip Claude validation (faster)
+# Skip Claude validation (faster, still does number format check)
 python main.py input/document.pdf --skip-validation
 
 # Rebuild Excel after human corrections
@@ -107,8 +110,11 @@ Priority order:
 
 ```yaml
 ocr:
-  lang: "it"              # Italian + English
+  lang: "it"              # Primary language
   use_angle_cls: true
+number_format:
+  thousands_sep: "."
+  decimal_sep: ","
 validation:
   accuracy_threshold: 0.85
   claude_model: "claude-opus-4-8"
@@ -132,14 +138,15 @@ rotation:
 │   ├── pdf_classifier.py       Text-selectable vs scanned detection
 │   ├── page_renderer.py        PDF → PNG at 300 DPI
 │   ├── rotation_corrector.py   3-stage: 90° fix + baseline tilt + fine deskew
-│   ├── table_ocr.py            PaddleOCR 3.6 (TableRecognitionPipelineV2 + fallback)
-│   ├── table_reconstructor.py  Template-aware column/row detection
+│   ├── table_ocr.py            PaddleOCR 3.6 engine wrapper
+│   ├── table_reconstructor.py  Template-aware column/row reconstruction + validation
 │   ├── text_extractor.py       pdfplumber for text-selectable pages
-│   ├── claude_validator.py     Opus 4.8 numeric validation
+│   ├── claude_validator.py     LLM semantic validation
 │   ├── excel_builder.py        Metadata header + table → Excel
 │   └── ui_server.py            Flask UI for human correction
 ├── tests/
-│   └── test_pipeline.py        12 unit tests (page 7 benchmark)
+│   └── test_pipeline.py        Unit tests
+├── docs/                       Module documentation (for AI agents)
 ├── config.yaml
 ├── requirements.txt
 ├── main.py                     CLI entry point
@@ -154,7 +161,9 @@ rotation:
 - poppler-utils (for pdf2image: `apt install poppler-utils` / `brew install poppler`)
 - 32GB RAM recommended for large PDFs
 
-## Dependencies Note
+## Known Limitations
 
-PaddlePaddle 3.3.0 has a known OneDNN/PIR bug on CPU. Use 3.2.2 until fixed.
-Set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` to skip model connectivity checks.
+- PaddlePaddle 3.3.0 has a known OneDNN/PIR bug on CPU — use 3.2.2
+- Set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` to skip model connectivity checks
+- Template-aware reconstruction assumes 4-column layout with known header patterns
+- Pages without detectable column headers fall back to adaptive Y-grouping (less accurate)

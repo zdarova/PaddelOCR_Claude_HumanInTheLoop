@@ -59,11 +59,28 @@ def process_pdf(pdf_path: Path, pages: list[int] | None = None, skip_validation:
             result = extract_table(rotated_path, page_num, pdf_path.stem)
             all_results.append(result)
 
-    # 6. Validate with Claude (raw_ocr pages auto-flagged for review)
+    # 6. Validate: number format check (always) + Claude (if not skipped)
+    from src.config import CONFIG
+    threshold = CONFIG["validation"]["accuracy_threshold"]
+
+    for result in all_results:
+        num_val = result.get("number_validation", {})
+        if num_val and not num_val.get("valid", True):
+            score = num_val.get("accuracy_score", 0)
+            notes = result.get("validation_notes", "")
+            if score < threshold:
+                print(f"     Page {result['page_num']}: ⚠️ {score:.0%} — {notes[:80]}")
+                from src.claude_validator import _queue_page
+                _queue_page(result)
+            else:
+                print(f"     Page {result['page_num']}: ⚠️ {score:.0%} (minor issues)")
+        else:
+            print(f"     Page {result['page_num']}: ✅ numbers valid")
+
     if not skip_validation:
         print("  🤖 Validating with Claude...")
         for result in all_results:
-            if result.get("extraction_mode") == "raw_ocr":
+            if result.get("extraction_mode") == "raw_ocr" and not result.get("table_columns"):
                 print(f"     Page {result['page_num']}: ⚠️ raw_ocr fallback — auto-queued for review")
                 result["accuracy_score"] = 0.0
                 result["validation_notes"] = "Raw OCR fallback (no table structure detected) — needs manual review"
@@ -72,7 +89,7 @@ def process_pdf(pdf_path: Path, pages: list[int] | None = None, skip_validation:
             else:
                 result = validate_page(result)
                 score = result.get("accuracy_score", 0)
-                status = "✅" if score >= 0.85 else "⚠️"
+                status = "✅" if score >= threshold else "⚠️"
                 print(f"     Page {result['page_num']}: {status} {score:.0%}")
 
     # 7. Build Excel
