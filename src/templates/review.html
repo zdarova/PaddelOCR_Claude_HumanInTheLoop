@@ -8,12 +8,15 @@
         .image-panel { flex: 2; position: relative; overflow: auto; border: 1px solid #ccc; }
         .image-panel img { max-width: 100%; }
         .cell-overlay {
-            position: absolute; border: 2px solid rgba(25, 118, 210, 0.7);
-            background: rgba(25, 118, 210, 0.1); cursor: pointer;
+            position: absolute; cursor: pointer;
             font-size: 10px; overflow: hidden;
         }
-        .cell-overlay:hover { background: rgba(25, 118, 210, 0.3); }
-        .cell-overlay.selected { border-color: #d32f2f; background: rgba(211, 47, 47, 0.2); }
+        .cell-overlay:hover { opacity: 0.8; }
+        .cell-overlay.selected { border-color: #fff !important; background: rgba(255, 255, 255, 0.4) !important; box-shadow: 0 0 6px #fff; }
+        .cell-overlay.conf-green  { border: 2px solid rgba(56, 142, 60, 0.8); background: rgba(56, 142, 60, 0.12); }
+        .cell-overlay.conf-yellow { border: 2px solid rgba(245, 166, 35, 0.8); background: rgba(245, 166, 35, 0.15); }
+        .cell-overlay.conf-red    { border: 2px solid rgba(211, 47, 47, 0.8); background: rgba(211, 47, 47, 0.15); }
+        .cell-overlay.conf-violet { border: 2px solid rgba(142, 36, 170, 0.8); background: rgba(142, 36, 170, 0.18); }
         .editor-panel { flex: 1; overflow-y: auto; }
         .cell-editor { margin-bottom: 0.5rem; padding: 0.5rem; border: 1px solid #eee; border-radius: 4px; }
         .cell-editor input { width: 100%; padding: 0.3rem; box-sizing: border-box; }
@@ -87,7 +90,9 @@
                 }
 
                 const div = document.createElement('div');
-                div.className = 'cell-overlay';
+                const conf = cell.confidence || 0;
+                const confClass = conf >= 0.9 ? 'conf-green' : conf >= 0.7 ? 'conf-yellow' : conf >= 0.5 ? 'conf-red' : 'conf-violet';
+                div.className = 'cell-overlay ' + confClass;
                 div.style.left = (x1 * scaleX) + 'px';
                 div.style.top = (y1 * scaleY) + 'px';
                 div.style.width = (w * scaleX) + 'px';
