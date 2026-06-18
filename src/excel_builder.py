@@ -34,30 +34,39 @@ def build_excel(pdf_stem: str) -> Path:
                 csv_path = OCR_DIR / f"{pdf_stem}_page_{page_num:04d}.csv"
 
             if csv_path.exists() and csv_path.stat().st_size > 0:
-                # Build sheet: metadata header + table data
+                # Build sheet: metadata header + column headers + table data
                 sheet_rows = []
 
-                # Add form metadata header if available
+                # Add form metadata as structured rows
                 table_header = page_data.get("table_header", {})
                 if table_header:
-                    for key in ["allegato", "joint_venture", "tipo_contratto", "attivita", "fase", "subfase", "commessa", "commessa_desc"]:
-                        val = table_header.get(key, "")
-                        if val:
-                            sheet_rows.append([val])
-                    sheet_rows.append([])  # blank separator
+                    meta_fields = [
+                        ("ALLEGATO", table_header.get("allegato", "")),
+                        ("JOINT VENTURE", table_header.get("joint_venture", "")),
+                        ("TIPO CONTRATTO", table_header.get("tipo_contratto", "")),
+                        ("ATTIVITA'", table_header.get("attivita", "")),
+                        ("FASE", table_header.get("fase", "")),
+                        ("SUBFASE", table_header.get("subfase", "")),
+                        ("COMMESSA", " ".join(filter(None, [table_header.get("commessa", ""), table_header.get("commessa_desc", "")]))),
+                    ]
+                    for label, value in meta_fields:
+                        if value:
+                            sheet_rows.append([label, value, "", ""])
+                    sheet_rows.append(["", "", "", ""])  # blank separator
 
-                # Add table data from CSV
+                # Add table data from CSV (includes column headers + data + totals)
                 with open(csv_path, newline="") as cf:
                     import csv as csv_mod
                     reader = csv_mod.reader(cf)
                     for row in reader:
                         sheet_rows.append(row)
 
-                # Normalize column count
-                max_cols = max(len(r) for r in sheet_rows) if sheet_rows else 1
+                # Normalize column count to 4
                 for r in sheet_rows:
-                    while len(r) < max_cols:
+                    while len(r) < 4:
                         r.append("")
+                    if len(r) > 4:
+                        r[:] = r[:4]
 
                 df = pd.DataFrame(sheet_rows)
             else:

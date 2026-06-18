@@ -59,38 +59,71 @@ def process_pdf(pdf_path: Path, pages: list[int] | None = None, skip_validation:
             result = extract_table(rotated_path, page_num, pdf_path.stem)
             all_results.append(result)
 
-    # 6. Validate: number format check (always) + Claude (if not skipped)
+    # 6. Page type classification + deterministic validation
+    from src.page_router import classify_page_type
+    from src.validators import validate_detail_page
     from src.config import CONFIG
     threshold = CONFIG["validation"]["accuracy_threshold"]
 
+    print("  📋 Classifying page types & validating...")
     for result in all_results:
-        num_val = result.get("number_validation", {})
-        if num_val and not num_val.get("valid", True):
-            score = num_val.get("accuracy_score", 0)
-            notes = result.get("validation_notes", "")
-            if score < threshold:
-                print(f"     Page {result['page_num']}: ⚠️ {score:.0%} — {notes[:80]}")
-                from src.claude_validator import _queue_page
-                _queue_page(result)
-            else:
-                print(f"     Page {result['page_num']}: ⚠️ {score:.0%} (minor issues)")
-        else:
-            print(f"     Page {result['page_num']}: ✅ numbers valid")
+        # Classify page type
+        page_type, type_conf = classify_page_type(result.get("cells", []))
+        result["page_type"] = page_type
+        result["page_type_confidence"] = type_conf
 
-    if not skip_validation:
-        print("  🤖 Validating with Claude...")
-        for result in all_results:
-            if result.get("extraction_mode") == "raw_ocr" and not result.get("table_columns"):
-                print(f"     Page {result['page_num']}: ⚠️ raw_ocr fallback — auto-queued for review")
-                result["accuracy_score"] = 0.0
-                result["validation_notes"] = "Raw OCR fallback (no table structure detected) — needs manual review"
-                from src.claude_validator import _queue_page
-                _queue_page(result)
+        # Run deterministic validators on DETAIL_TABLE pages
+        if page_type == "DETAIL_TABLE" and result.get("table_columns"):
+            from src.table_reconstructor import reconstruct_table
+            # Re-read rows from CSV for validation
+            import csv as csv_mod
+            csv_path = Path(result.get("csv_path", ""))
+            if not csv_path or not csv_path.exists():
+                from src.config import OCR_DIR
+                csv_path = OCR_DIR / f"{result['pdf_stem']}_page_{result['page_num']:04d}.csv"
+            if csv_path.exists():
+                with open(csv_path) as f:
+                    rows = list(csv_mod.reader(f))
+                det_validation = validate_detail_page(rows, result.get("table_columns", []))
+                result["deterministic_validation"] = det_validation
+                if not det_validation["valid"]:
+                    print(f"     Page {result['page_num']}: ⚠️  {page_type} — {len(det_validation['issues'])} issues")
+                    for issue in det_validation["issues"][:3]:
+                        print(f"        • {issue}")
+                else:
+                    print(f"     Page {result['page_num']}: ✅ {page_type} — {det_validation['data_rows']} data rows, reconciled")
             else:
-                result = validate_page(result)
-                score = result.get("accuracy_score", 0)
-                status = "✅" if score >= threshold else "⚠️"
-                print(f"     Page {result['page_num']}: {status} {score:.0%}")
+                print(f"     Page {result['page_num']}: ✅ {page_type}")
+        elif page_type == "DETAIL_TABLE":
+            # Has number validation from OCR step
+            num_val = result.get("number_validation", {})
+            if num_val and not num_val.get("valid", True):
+                score = num_val.get("accuracy_score", 0)
+                notes = result.get("validation_notes", "")
+                if score < threshold:
+                    print(f"     Page {result['page_num']}: ⚠️  {page_type} {score:.0%} — {notes[:60]}")
+                    from src.claude_validator import _queue_page
+                    _queue_page(result)
+                else:
+                    print(f"     Page {result['page_num']}: ⚠️  {page_type} {score:.0%} (minor)")
+            else:
+                print(f"     Page {result['page_num']}: ✅ {page_type}")
+        else:
+            print(f"     Page {result['page_num']}: 📄 {page_type} (conf={type_conf:.0%})")
+
+    # 7. Claude validation (only if not skipped, only on pages that passed deterministic checks)
+    if not skip_validation:
+        print("  🤖 Claude validation (low-confidence pages)...")
+        for result in all_results:
+            if result.get("page_type") != "DETAIL_TABLE":
+                continue
+            det_val = result.get("deterministic_validation", {})
+            if det_val and det_val.get("valid"):
+                continue  # already validated deterministically
+            result = validate_page(result)
+            score = result.get("accuracy_score", 0)
+            status = "✅" if score >= threshold else "⚠️"
+            print(f"     Page {result['page_num']}: {status} Claude {score:.0%}")
 
     # 7. Build Excel
     print("  📊 Building Excel output...")

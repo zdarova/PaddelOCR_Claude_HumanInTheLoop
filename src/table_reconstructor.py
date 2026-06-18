@@ -21,9 +21,87 @@ COLUMN_HEADERS = [
     "TOTALE PROGRESSIVO",
 ]
 
-# Italian number format: optional thousands dots + mandatory comma + 2 decimals
-# Valid: 0,00 | 45,50 | 4.152,96 | 610.923,82 | 7.296.050,00
-ITALIAN_NUMBER_RE = re.compile(r'^\d{1,3}(\.\d{3})*,\d{2}$')
+# Italian number format: optional sign + thousands dots + comma + 2 decimals
+# Valid: 0,00 | 45,50 | 4.152,96 | 610.923,82 | 7.296.050,00 | 1.800.100,00- (trailing minus)
+ITALIAN_NUMBER_RE = re.compile(r'^-?\d{1,3}(\.\d{3})*,\d{2}-?$')
+
+
+# --- NUMBER AUTO-FIX HEURISTICS ---
+
+def fix_italian_number(s: str) -> tuple[str, bool]:
+    """
+    Attempt to auto-fix OCR errors in Italian numbers.
+    Returns (fixed_value, was_modified).
+    If already valid, returns unchanged.
+    """
+    s = s.strip().replace(" ", "")
+    if not s or not any(ch.isdigit() for ch in s):
+        return s, False
+    if ITALIAN_NUMBER_RE.match(s):
+        return s, False  # already valid
+
+    original = s
+    # Preserve trailing minus (Italian negative notation)
+    trailing_minus = s.endswith("-")
+    if trailing_minus:
+        s = s[:-1]
+
+    # H3: Last dot-separated segment is exactly 2 digits → comma misread as dot
+    # e.g. '1.150.66' → '1.150,66' or '12.50' → '12,50'
+    m = re.match(r'^(\d[\d.]*)\.([\d]{2})$', s)
+    if m:
+        s = m.group(1) + "," + m.group(2)
+
+    # H1: Last dot-group has >3 digits → last 2 are decimals (comma missed)
+    # e.g. '1.15066' → '1.150,66' or '98.65378' → '98.653,78'
+    if "," not in s:
+        m = re.match(r'^(\d{1,3}(?:\.\d{3})*\.)(\d{4,})$', s)
+        if m:
+            prefix, tail = m.group(1), m.group(2)
+            # Rebuild: tail minus last 2 = thousands part, last 2 = decimals
+            int_tail = tail[:-2]
+            dec = tail[-2:]
+            # Re-apply thousands dots to int_tail
+            int_tail_dotted = _add_thousands_dots(int_tail)
+            s = prefix + int_tail_dotted + "," + dec
+            # Clean double dots
+            s = re.sub(r'\.+', '.', s)
+            s = s.lstrip('.')
+
+    # H2: Pure digits, no separators → insert comma before last 2
+    # e.g. '115066' → '1.150,66' or '9900' → '99,00'
+    if "," not in s and "." not in s and re.match(r'^\d+$', s) and len(s) >= 3:
+        int_part = s[:-2]
+        dec_part = s[-2:]
+        int_part = _add_thousands_dots(int_part) if int_part else "0"
+        s = f"{int_part},{dec_part}"
+
+    # H4: Number like '5.792.47244' → '5.792.472,44' (last group > 3 digits)
+    if "," not in s and "." in s:
+        parts = s.split(".")
+        if len(parts[-1]) > 3:
+            last = parts[-1]
+            parts[-1] = last[:-2]
+            s = ".".join(parts) + "," + last[-2:]
+
+    # Re-add trailing minus
+    if trailing_minus:
+        s = s + "-"
+
+    was_modified = s != original
+    return s, was_modified
+
+
+def _add_thousands_dots(s: str) -> str:
+    """Add thousands dots to an integer string: '1150' → '1.150'"""
+    if len(s) <= 3:
+        return s
+    result = []
+    for i, ch in enumerate(reversed(s)):
+        if i > 0 and i % 3 == 0:
+            result.append(".")
+        result.append(ch)
+    return "".join(reversed(result))
 
 
 def reconstruct_table(cells: list[dict]) -> dict:
@@ -211,6 +289,16 @@ def _build_rows(cells: list[dict], col_positions: dict[str, float]) -> list[list
 
     # Remove empty rows
     rows = [r for r in rows if any(cell.strip() for cell in r)]
+
+    # Auto-fix Italian numbers in financial columns (cols 2, 3 = TOTALE PERIODO, TOTALE PROGRESSIVO)
+    for row in rows:
+        for col_idx in range(2, min(4, len(row))):
+            cell = row[col_idx].strip()
+            if cell and any(ch.isdigit() for ch in cell) and not any(k in cell.upper() for k in ["TOTALE", "PERIODO", "PROGRESSIVO", "FASE", "ATTIVITA", "SUBFASE"]):
+                fixed, was_modified = fix_italian_number(cell)
+                if was_modified:
+                    row[col_idx] = fixed
+
     return rows
 
 
@@ -372,8 +460,12 @@ def validate_italian_numbers(result: dict) -> dict:
 
 
 def _parse_italian_number(s: str) -> float:
-    """Parse Italian format number to float: 610.923,82 → 610923.82"""
-    return float(s.replace(".", "").replace(",", "."))
+    """Parse Italian format number to float: 610.923,82 → 610923.82, 860,00- → -860.00"""
+    s = s.strip()
+    negative = s.startswith("-") or s.endswith("-")
+    s = s.strip("-")
+    result = float(s.replace(".", "").replace(",", "."))
+    return -result if negative else result
 
 
 def _format_italian_number(n: float) -> str:
