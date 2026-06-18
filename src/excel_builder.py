@@ -37,21 +37,26 @@ def build_excel(pdf_stem: str) -> Path:
                 # Build sheet: metadata header + column headers + table data
                 sheet_rows = []
 
-                # Add form metadata as structured rows
+                # Add form metadata as structured rows (label | value | value2 | value3)
                 table_header = page_data.get("table_header", {})
                 if table_header:
-                    meta_fields = [
-                        ("ALLEGATO", table_header.get("allegato", "")),
-                        ("JOINT VENTURE", table_header.get("joint_venture", "")),
-                        ("TIPO CONTRATTO", table_header.get("tipo_contratto", "")),
-                        ("ATTIVITA'", table_header.get("attivita", "")),
-                        ("FASE", table_header.get("fase", "")),
-                        ("SUBFASE", table_header.get("subfase", "")),
-                        ("COMMESSA", " ".join(filter(None, [table_header.get("commessa", ""), table_header.get("commessa_desc", "")]))),
+                    meta_rows = [
+                        ["Pagina", table_header.get("pagina", ""), "", ""],
+                        ["Joint Venture", table_header.get("joint_venture_code", ""), table_header.get("joint_venture_name", ""), ""],
+                        ["Tipo Contratto", table_header.get("tipo_contratto", ""), "", ""],
+                        ["Attività", table_header.get("attivita_num", ""), table_header.get("attivita_desc", ""), ""],
+                        ["Fase", table_header.get("fase_num", ""), table_header.get("fase_desc", ""), ""],
+                        ["Subfase", table_header.get("subfase", ""), "", ""],
+                        ["Commessa", table_header.get("commessa_code", ""), table_header.get("commessa_desc", ""), ""],
                     ]
-                    for label, value in meta_fields:
-                        if value:
-                            sheet_rows.append([label, value, "", ""])
+                    # Add optional fields if present
+                    if table_header.get("titolo_minerario"):
+                        meta_rows.insert(3, ["Titolo Minerario", table_header["titolo_minerario"], "", ""])
+                    if table_header.get("equity_group"):
+                        meta_rows.insert(4, ["Equity Group", table_header["equity_group"], table_header.get("equity_pct", ""), ""])
+
+                    for row in meta_rows:
+                        sheet_rows.append(row)
                     sheet_rows.append(["", "", "", ""])  # blank separator
 
                 # Add table data from CSV (includes column headers + data + totals)

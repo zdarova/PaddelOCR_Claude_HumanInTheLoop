@@ -155,14 +155,20 @@ def reconstruct_table(cells: list[dict]) -> dict:
 
 def _extract_metadata(cells: list[dict], header_y: float) -> dict:
     """Extract form header metadata from cells above the table.
-    Merges adjacent cells on the same line to reconstruct full field values."""
+    Merges adjacent cells on same line, then parses structured fields.
+    
+    Returns dict with individual field values:
+      pagina, joint_venture_code, joint_venture_name, tipo_contratto,
+      titolo_minerario, equity_group, equity_pct,
+      attivita_num, attivita_desc, fase_num, fase_desc,
+      subfase, commessa_code, commessa_desc
+    """
     meta = {}
-    # Get all cells above the table header
     header_cells = [c for c in cells if c["bbox"][0][1] < header_y]
     if not header_cells:
         return meta
 
-    # Group cells into lines by Y proximity (within 15px = same line)
+    # Group cells into lines by Y proximity (within 15px)
     sorted_cells = sorted(header_cells, key=lambda c: (c["bbox"][0][1], c["bbox"][0][0]))
     lines = []
     current_line = [sorted_cells[0]]
@@ -174,34 +180,88 @@ def _extract_metadata(cells: list[dict], header_y: float) -> dict:
             current_line = [c]
     lines.append(current_line)
 
-    # Merge each line into a single text string
     for line_cells in lines:
         sorted_line = sorted(line_cells, key=lambda c: c["bbox"][0][0])
-        line_text = " ".join(c["text"].strip() for c in sorted_line).strip()
+        texts = [c["text"].strip() for c in sorted_line]
+        line_text = " ".join(texts)
         line_upper = line_text.upper()
 
+        # Pagina number
+        if "PAGINA:" in line_upper or "PAGINA" in line_upper:
+            for t in reversed(texts):  # number is usually last
+                if t.strip().isdigit():
+                    meta["pagina"] = t.strip()
+                    break
+
+        # ALLEGATO line
         if "ALLEGATO" in line_upper and "RENDICONTO" in line_upper:
             meta["allegato"] = line_text
-        elif "JOINT VENTURE:" in line_upper or ("JOINT VENTURE" in line_upper and "TIPO" not in line_upper and "ALLEGATO" not in line_upper):
-            meta["joint_venture"] = line_text
-        elif "TIPO CONTRATTO" in line_upper:
-            meta["tipo_contratto"] = line_text
-        elif "ATTIVITA" in line_upper:
-            meta["attivita"] = line_text
-        elif line_upper.startswith("FASE:") or ("FASE:" in line_upper and "SUB" not in line_upper):
-            meta["fase"] = line_text
-        elif "SUBFASE" in line_upper:
-            meta["subfase"] = line_text
-        elif "COMMESSA:" in line_upper:
-            meta["commessa"] = line_text
-            # Also check if description is on a separate nearby line
-        elif "commessa" in meta and not meta.get("commessa_desc") and sorted_line[0]["bbox"][0][0] > 800:
-            # Description line (to the right, just below COMMESSA)
-            meta["commessa_desc"] = line_text
 
-    # If commessa_desc found separately, merge into commessa
-    if "commessa_desc" in meta and "commessa" in meta:
-        meta["commessa"] = meta["commessa"] + " " + meta.pop("commessa_desc")
+        # JOINT VENTURE: code + name
+        if "JOINT VENTURE:" in line_upper and "TIPO" not in line_upper:
+            # Extract code and name after "JOINT VENTURE:"
+            jv_text = line_text
+            if "JOINT VENTURE:" in jv_text:
+                after_label = jv_text.split("JOINT VENTURE:", 1)[1].strip()
+            elif "JOINT VENTURE:" in jv_text.upper():
+                idx = jv_text.upper().index("JOINT VENTURE:") + len("JOINT VENTURE:")
+                after_label = jv_text[idx:].strip()
+            else:
+                after_label = jv_text
+            parts = after_label.split(" ", 1)
+            meta["joint_venture_code"] = parts[0] if parts else ""
+            meta["joint_venture_name"] = parts[1] if len(parts) > 1 else ""
+
+        # TIPO CONTRATTO
+        if "TIPO CONTRATTO" in line_upper:
+            meta["tipo_contratto"] = line_text
+
+        # TITOLO MINERARIO (only on first pages of each activity)
+        if "TITOLO MINERARIO:" in line_upper and "ALLEGATO" not in line_upper:
+            after = line_text.split(":", 1)[1].strip() if ":" in line_text else ""
+            meta["titolo_minerario"] = after
+
+        # EQUITY GROUP
+        if "EQUITY GROUP" in line_upper:
+            for t in texts:
+                if t.upper().startswith("E") and len(t) <= 4 and t[1:].isdigit():
+                    meta["equity_group"] = t
+                elif "," in t and t.replace(",", "").replace(".", "").isdigit():
+                    meta["equity_pct"] = t
+
+        # ATTIVITA'
+        if "ATTIVITA" in line_upper and "TOTALE" not in line_upper:
+            # Find numeric part and description
+            for i, t in enumerate(texts):
+                if t.strip().isdigit() and len(t.strip()) <= 2:
+                    meta["attivita_num"] = t.strip()
+                    # Description is usually next text
+                    remaining = [x for x in texts[i+1:] if x.upper() not in ["ATTIVITA'", "ATTIVITA':", "ATTIVITA"]]
+                    if remaining:
+                        meta["attivita_desc"] = " ".join(remaining)
+                    break
+
+        # FASE
+        if (line_upper.startswith("FASE:") or "FASE:" in line_upper) and "SUB" not in line_upper and "TOTALE" not in line_upper:
+            for i, t in enumerate(texts):
+                if t.strip().isdigit() and len(t.strip()) <= 3:
+                    meta["fase_num"] = t.strip()
+                    remaining = [x for x in texts[i+1:] if x.upper() != "FASE:"]
+                    if remaining:
+                        meta["fase_desc"] = " ".join(remaining)
+                    break
+
+        # SUBFASE
+        if "SUBFASE" in line_upper and "TOTALE" not in line_upper:
+            after = line_text.replace("SUBFASE", "").replace(":", "").strip()
+            meta["subfase"] = after if after else ""
+
+        # COMMESSA
+        if "COMMESSA:" in line_upper and "TOTALE" not in line_upper:
+            commessa_parts = [t for t in texts if "COMMESSA" not in t.upper()]
+            if commessa_parts:
+                meta["commessa_code"] = commessa_parts[0]
+                meta["commessa_desc"] = " ".join(commessa_parts[1:]) if len(commessa_parts) > 1 else ""
 
     return meta
 
