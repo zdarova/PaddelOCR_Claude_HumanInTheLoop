@@ -33,7 +33,7 @@
     <div class="container">
         <div class="image-panel" id="imagePanel">
             {% if page_data.image_path %}
-                <img id="pageImage" src="/api/image/{{ page_data.image_path | replace('\\', '/') | split('/') | last }}" onload="renderOverlays()">
+                <img id="pageImage" src="/api/image/{{ page_data.image_path.replace('\\', '/').split('/')[-1] }}" onload="renderOverlays()">
             {% else %}
                 <p>No image available (text-selectable page)</p>
             {% endif %}
