@@ -117,11 +117,24 @@ def reconstruct_table(cells: list[dict]) -> dict:
 
     # Step 1: Find header cells and their X positions
     col_anchors = _find_column_anchors(cells)
+
+    # FALLBACK: if no header anchors found, infer columns from data X-positions
+    # Only if page looks like a detail table (has numeric codes in left column)
+    if not col_anchors or len(col_anchors) < 3:
+        # Check if this looks like a detail table (has line-item codes at left edge)
+        left_codes = [c for c in cells if c["bbox"][0][0] < 300 and c["bbox"][0][1] > 450
+                      and (c["text"].strip().isdigit() or c["text"].strip().startswith("P"))]
+        if len(left_codes) >= 2:
+            col_anchors = _infer_columns_from_data(cells)
+
     if not col_anchors or len(col_anchors) < 3:
         return {"header": {}, "columns": [], "rows": []}
 
     # Step 2: Extract form metadata from cells above the table header
     header_y = min(a["y"] for a in col_anchors.values())
+    # If columns were inferred (no header row), use Y=450 as metadata cutoff
+    if header_y > 450 and not _find_column_anchors(cells):
+        header_y = 450.0
     metadata = _extract_metadata(cells, header_y)
 
     # Step 3: Get only cells at/below the header (the table body)
@@ -204,6 +217,77 @@ def _find_column_anchors(cells: list[dict]) -> dict[str, dict]:
                 anchors["TOTALE PROGRESSIVO"] = {"x": x_left, "y": y_top}
         elif text == "PROGRESSIVO":
             anchors["TOTALE PROGRESSIVO"] = {"x": x_left, "y": y_top}
+
+    return anchors
+
+
+def _infer_columns_from_data(cells: list[dict]) -> dict[str, dict]:
+    """
+    Fallback: infer 4-column layout from X-position clustering of data cells.
+    Used when standard header row is missing (continuation pages).
+    
+    Expected X-zones for this document family:
+      Col 1 (Code):        X ~  40-400
+      Col 2 (Description): X ~ 500-1500
+      Col 3 (Period):      X ~ 2100-2500
+      Col 4 (Progressive): X ~ 2600-3100
+    """
+    if not cells:
+        return {}
+
+    # Collect left-edge X positions of cells below the metadata area (Y > 450)
+    data_cells = [c for c in cells if c["bbox"][0][1] > 450]
+    if len(data_cells) < 6:
+        return {}
+
+    x_lefts = sorted(c["bbox"][0][0] for c in data_cells)
+    page_width = max(c["bbox"][1][0] for c in cells)
+
+    # Find large X-gaps to identify column boundaries
+    unique_xs = sorted(set(int(x) for x in x_lefts))
+    if len(unique_xs) < 4:
+        return {}
+
+    gaps = []
+    for i in range(1, len(unique_xs)):
+        gap = unique_xs[i] - unique_xs[i-1]
+        if gap > page_width * 0.05:  # significant gap (>5% of page width)
+            gaps.append((gap, unique_xs[i-1], unique_xs[i]))
+
+    gaps.sort(key=lambda g: g[0], reverse=True)
+
+    # We need at least 3 gaps to separate 4 columns
+    if len(gaps) < 3:
+        # Try with lower threshold
+        gaps = [(unique_xs[i] - unique_xs[i-1], unique_xs[i-1], unique_xs[i])
+                for i in range(1, len(unique_xs))
+                if unique_xs[i] - unique_xs[i-1] > page_width * 0.03]
+        gaps.sort(key=lambda g: g[0], reverse=True)
+
+    if len(gaps) < 3:
+        return {}
+
+    # Take top 3 gaps as column separators
+    separators = sorted([g[2] for g in gaps[:3]])  # X positions where new columns start
+
+    # Map to known column names based on X-position ranges
+    # First column center < 500, second < 2000, third < 2600, fourth > 2600
+    anchors = {}
+    col_starts = [unique_xs[0]] + separators
+
+    for i, x_start in enumerate(col_starts):
+        if i == 0:
+            anchors["CODICE NATURA"] = {"x": float(x_start), "y": 500.0}
+        elif i == 1 and x_start < 1500:
+            anchors["DESCRIZIONE NATURA"] = {"x": float(x_start), "y": 500.0}
+        elif i == 2 or (i == 1 and x_start > 1500):
+            anchors["TOTALE PERIODO"] = {"x": float(x_start), "y": 500.0}
+        elif i == 3 or (i == 2 and x_start > 2500):
+            anchors["TOTALE PROGRESSIVO"] = {"x": float(x_start), "y": 500.0}
+
+    # Ensure we have at least 3 columns
+    if len(anchors) < 3:
+        return {}
 
     return anchors
 
