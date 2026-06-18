@@ -200,10 +200,8 @@ def extract_table(image_path: Path, page_num: int, pdf_stem: str) -> dict:
         "modified": False,
     }
 
-    # Save JSON
+    # Save JSON (initial, will be updated after reconstruction)
     json_path = OCR_DIR / f"{pdf_stem}_page_{page_num:04d}.json"
-    with open(json_path, "w") as f:
-        json.dump(page_result, f, indent=2)
     page_result["json_path"] = str(json_path)
 
     # Save CSV — prefer structural row/col, then spatial clustering, fallback to adaptive Y
@@ -229,6 +227,10 @@ def extract_table(image_path: Path, page_num: int, pdf_stem: str) -> dict:
         else:
             _write_csv_adaptive(all_cells, csv_path)
     page_result["csv_path"] = str(csv_path)
+
+    # Save final JSON with all enrichment (table_header, table_columns, csv_path, validation)
+    with open(json_path, "w") as f:
+        json.dump(page_result, f, indent=2)
 
     return page_result
 

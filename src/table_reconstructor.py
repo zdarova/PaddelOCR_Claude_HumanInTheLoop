@@ -154,39 +154,55 @@ def reconstruct_table(cells: list[dict]) -> dict:
 
 
 def _extract_metadata(cells: list[dict], header_y: float) -> dict:
-    """Extract form header metadata from cells above the table."""
+    """Extract form header metadata from cells above the table.
+    Merges adjacent cells on the same line to reconstruct full field values."""
     meta = {}
-    for c in cells:
-        if c["bbox"][0][1] >= header_y:
-            continue
-        text = c["text"].strip()
-        text_upper = text.upper()
+    # Get all cells above the table header
+    header_cells = [c for c in cells if c["bbox"][0][1] < header_y]
+    if not header_cells:
+        return meta
 
-        if "ALLEGATO" in text_upper and "RENDICONTO" in text_upper:
-            meta["allegato"] = text
-        elif text_upper.startswith("JOINT VENTURE:") or (text_upper.startswith("JOINT VENTURE") and ":" not in text_upper and "O" in text_upper):
-            meta["joint_venture"] = text
-        elif "JOINT VENTURE" in text_upper and "TIPO" not in text_upper and "ALLEGATO" not in text_upper:
-            meta.setdefault("joint_venture", text)
-        elif text_upper.startswith("TIPO CONTRATTO"):
-            meta["tipo_contratto"] = text
-        elif text_upper.startswith("ATTIVITA"):
-            meta["attivita"] = text
-        elif text_upper.startswith("FASE:"):
-            meta["fase"] = text
-        elif text_upper.startswith("SUBFASE"):
-            meta["subfase"] = text
-        elif text_upper.startswith("COMMESSA:"):
-            meta["commessa"] = text
-        elif "commessa" in meta and c["bbox"][0][0] > 800 and c["bbox"][0][1] > meta.get("_commessa_y", 0):
-            # Commessa description (to the right of COMMESSA: label)
-            meta["commessa_desc"] = text
+    # Group cells into lines by Y proximity (within 15px = same line)
+    sorted_cells = sorted(header_cells, key=lambda c: (c["bbox"][0][1], c["bbox"][0][0]))
+    lines = []
+    current_line = [sorted_cells[0]]
+    for c in sorted_cells[1:]:
+        if abs(c["bbox"][0][1] - current_line[0]["bbox"][0][1]) <= 15:
+            current_line.append(c)
+        else:
+            lines.append(current_line)
+            current_line = [c]
+    lines.append(current_line)
 
-        # Track commessa Y for description detection
-        if text_upper.startswith("COMMESSA:"):
-            meta["_commessa_y"] = c["bbox"][0][1]
+    # Merge each line into a single text string
+    for line_cells in lines:
+        sorted_line = sorted(line_cells, key=lambda c: c["bbox"][0][0])
+        line_text = " ".join(c["text"].strip() for c in sorted_line).strip()
+        line_upper = line_text.upper()
 
-    meta.pop("_commessa_y", None)
+        if "ALLEGATO" in line_upper and "RENDICONTO" in line_upper:
+            meta["allegato"] = line_text
+        elif "JOINT VENTURE:" in line_upper or ("JOINT VENTURE" in line_upper and "TIPO" not in line_upper and "ALLEGATO" not in line_upper):
+            meta["joint_venture"] = line_text
+        elif "TIPO CONTRATTO" in line_upper:
+            meta["tipo_contratto"] = line_text
+        elif "ATTIVITA" in line_upper:
+            meta["attivita"] = line_text
+        elif line_upper.startswith("FASE:") or ("FASE:" in line_upper and "SUB" not in line_upper):
+            meta["fase"] = line_text
+        elif "SUBFASE" in line_upper:
+            meta["subfase"] = line_text
+        elif "COMMESSA:" in line_upper:
+            meta["commessa"] = line_text
+            # Also check if description is on a separate nearby line
+        elif "commessa" in meta and not meta.get("commessa_desc") and sorted_line[0]["bbox"][0][0] > 800:
+            # Description line (to the right, just below COMMESSA)
+            meta["commessa_desc"] = line_text
+
+    # If commessa_desc found separately, merge into commessa
+    if "commessa_desc" in meta and "commessa" in meta:
+        meta["commessa"] = meta["commessa"] + " " + meta.pop("commessa_desc")
+
     return meta
 
 
